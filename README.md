@@ -5,7 +5,8 @@
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Design de novo protein binders against an epitope you choose, on a free cloud
-GPU, in about half an hour. [BoltzGen](https://jclinic.mit.edu/boltzgen/) for
+GPU, in about half an hour. Runs
+[BlitzGen](https://github.com/EpiGenomicsCode/blitzgen) `v0.1.0`: BoltzGen for
 design, [Blitz K16](https://github.com/EpiGenomicsCode/Blitz) — a 16-step
 distilled Boltz-2 student — for folding. The same models that built the
 [BinderBase](https://binderbase.org) catalogue.
@@ -14,13 +15,13 @@ The GPU is **yours**, not ours. Each run happens in your own Colab or Kaggle
 account on your own quota. Nothing is submitted to a server we operate, and
 there is nothing to pay for or sign up to beyond the host itself.
 
-> ### ⚠️ Not runnable yet
+> ### ⚠️ Not yet run on a T4
 >
-> The notebook needs `--folding_config` and `--seed`, which exist only in the
-> K16 fork of BoltzGen. **That fork is not published**, so `provenance.json`
-> carries a placeholder and cell 2 will fail. Publishing it is the single
-> remaining prerequisite; everything else in this repository is finished and
-> tested.
+> Every performance number below was measured on an A100 and scaled by memory
+> bandwidth. Whether the `cuequivariance` triton kernels used by triangle
+> attention support `sm_75` is **unknown**; if cell 6 fails inside
+> `triangular.py`, add `--config design use_kernels=false` for a pure-PyTorch
+> fallback at an unmeasured cost.
 
 ## Hosts
 

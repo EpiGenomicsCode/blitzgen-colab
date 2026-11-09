@@ -8,8 +8,8 @@
 
   "campaign": "BlitzGen HPA PrEST, campaign-20261103",
 
-  "blitzgen_src": "git+https://github.com/EpiGenomicsCode/blitzgen@UNPUBLISHED",
-  "blitzgen_src_status": "PLACEHOLDER -- the K16 fork is not public yet. The notebook CANNOT run until this is a real public ref. It must be pinned to a tag or commit sha, never a branch: @main would let the notebook's behaviour change under a user who saved it.",
+  "blitzgen_src": "blitzgen @ git+https://github.com/EpiGenomicsCode/blitzgen@v0.1.0",
+  "blitzgen_src_status": "Published 2026-11-09 and pinned to tag v0.1.0. Never point this at a branch: @main would let the notebook's behaviour change under a user who saved it, and check_notebook.py fails any unpinned ref. No CUDA extra is requested on purpose -- blitzgen's [cu12]/[cu13] extras carry the cuequivariance_ops_* wheels, which are large and never actually loaded in this pipeline (the triton kernels behind cuequivariance_torch are what run), so asking for them only adds a way for the install to fail.",
   "blitzgen_requires": ["--folding_config", "--seed"],
   "blitzgen_upstream": "https://github.com/HannesStark/boltzgen (has --folding_checkpoint; has NEITHER of the two flags above)",
 

@@ -3,10 +3,14 @@
 Versions are of the notebook, not of BoltzGen or the K16 weights — those are
 pinned in `provenance.json` and move independently.
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-11-09
 
-First version. Not yet runnable: `blitzgen_src` is a placeholder pending
-publication of the K16 fork.
+First version.
+
+- Pinned to [BlitzGen `v0.1.0`](https://github.com/EpiGenomicsCode/blitzgen/tree/v0.1.0),
+  published 2026-11-09. Installed without a CUDA extra: the
+  `cuequivariance_ops_*` wheels are large and never loaded by this pipeline, so
+  requesting them would only add a way for the install to fail.
 
 - 16-cell notebook: hardware probe → install → weights → K16 config → spec →
   run → results.

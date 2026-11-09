@@ -184,12 +184,17 @@ if cap_f < 8.0:
 cells.append(md("""---
 ## 2 · Install
 
-`BLITZGEN_SRC` must point at a **public** install source providing
-`--folding_config` and `--seed`. Upstream BoltzGen has neither.
+Installs [BlitzGen](https://github.com/EpiGenomicsCode/blitzgen) `v0.1.0`,
+pinned to a tag so this notebook behaves the same way next month as it does
+today. BlitzGen provides `--folding_config` and `--seed`; upstream BoltzGen has
+neither, so a stock `pip install boltzgen` will not work here.
 
-> **If this cell fails**, the fork is not published yet. See the note at the
-> bottom of the notebook — this is the one piece that cannot be worked around
-> from inside Colab.
+No CUDA extra is requested. BlitzGen's `[cu12]`/`[cu13]` extras carry the
+`cuequivariance_ops_*` wheels, which are large and are never actually loaded by
+this pipeline — the triton kernels behind `cuequivariance_torch` are what run.
+Asking for them would only add a way for the install to fail.
+
+Takes a couple of minutes.
 """))
 
 cells.append(code("""#@title Install BlitzGen
@@ -476,14 +481,13 @@ else:
 
 # --------------------------------------------------------- 8. caveats ------
 cells.append(md("""---
-## Known limitations, and the one open prerequisite
+## Known limitations
 
-**The install source must be public.** `--folding_config` and `--seed` are
+**This needs BlitzGen, not BoltzGen.** `--folding_config` and `--seed` are
 BlitzGen additions; upstream BoltzGen has neither, and without
-`--folding_config` the K16 weights silently run on a 200-step Boltz-2 schedule.
-As of 2026-11-09 the current K16 fork exists only as an unversioned local
-directory — `EpiGenomicsCode/boltzgen` is private and predates K16. **Publishing
-it is the one step that cannot be done from inside this notebook.**
+`--folding_config` the K16 weights silently run on a 200-step Boltz-2 schedule —
+no error, plausible-looking structures, wrong sampler. Cell 2 pins
+[`@@BLITZGEN_SRC@@`](https://github.com/EpiGenomicsCode/blitzgen/tree/v0.1.0).
 
 **Untested on a T4.** Every number here was measured on an A100 and extrapolated
 by a memory-bandwidth ratio. In particular, whether the `cuequivariance` triton
