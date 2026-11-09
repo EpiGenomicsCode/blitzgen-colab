@@ -33,7 +33,6 @@ SUBST = {
     "@@CFG_SHA@@":        PROV["fold_config_sha256"],
     "@@CKPT_SHA@@":       PROV["k16_checkpoint_sha256"],
     "@@CKPT_REPO@@":      PROV["k16_checkpoint_hf_repo"],
-    "@@CAMPAIGN@@":       PROV["campaign"],
 }
 
 def md(*lines):  return {"cell_type": "markdown", "metadata": {}, "source": list(lines)}
@@ -58,28 +57,16 @@ A handful of designed binder sequences with predicted structures and confidence
 metrics, for a target and epitope you choose. Everything is MIT-licensed and the
 model weights are public.
 
-## What this is *not*
+## Before you start
 
-This is deliberately **not** identical to the [BinderBase](https://binderbase.org)
-catalogue, and you should not mix the numbers without saying so:
+**You choose the epitope, and that choice is the run.** A binder designed
+against a badly chosen site will still come back with good-looking scores — the
+model answers the question you asked. Pick a solvent-exposed, reasonably compact
+surface patch, and treat the confidence metrics as "did the model do what I
+asked", not "is this a good drug target".
 
-| | BinderBase campaign | this notebook |
-|---|---|---|
-| precision | `bf16-mixed` | `bf16-mixed` on Ampere+, **`fp32` on older cards** |
-| designs per target | 100 | ~8–20 (session limits) |
-| epitope choice | HPA PrEST antibody-validated triage | **whatever you specify** |
-| seed | fixed, 42 | fixed where supported |
-
-The precision difference matters most. The diffusion sampler is stochastic, so
-changing precision does not perturb designs — it produces **different** designs
-drawn from the same distribution. Measured on 8 paired designs, fp32-vs-bf16
-spread sat inside the bf16-vs-bf16 run-to-run floor on every comparable metric,
-but that is an indication from a small sample, not a guarantee of equivalence.
-
-**The epitope row is the big one.** BinderBase targets come from a triage pipeline
-that picks antibody-validated, solvent-exposed, compact surface patches. Here you
-pick the site. A binder designed against a poorly chosen epitope will still score
-well — the model answers the question you asked.
+Designs are drawn fresh each run, so two runs give you different binders rather
+than the same ones refined. That is normal.
 
 ## Credit
 
@@ -99,7 +86,6 @@ you have. Nothing below is fetched at runtime from a moving reference.
 | BlitzGen source | `@@BLITZGEN_SRC@@` |
 | folding config sha256 | `@@CFG_SHA@@` |
 | K16 checkpoint sha256 | `@@CKPT_SHA@@` |
-| matches campaign | `@@CAMPAIGN@@` |
 
 Newest version: <https://github.com/EpiGenomicsCode/blitzgen-colab>
 """))
@@ -113,7 +99,7 @@ cannot run the job is discovered now rather than after a 7.5 GB download.
 
 It picks the precision for you:
 
-* **compute capability ≥ 8.0** (A100, L4, RTX 30xx/40xx) → `bf16-mixed`, same as the campaign.
+* **compute capability ≥ 8.0** (A100, L4, RTX 30xx/40xx) → `bf16-mixed`.
 * **below 8.0** (T4, V100) → `fp32`. bf16 needs Ampere.
 
 `fp16` is *not* an option on any card. It was tested and fails: the diffusion
@@ -155,7 +141,7 @@ print(f"capability     {cap}")
 print(f"driver         {driver}")
 print(f"gcc            {shutil.which('gcc') or 'MISSING -- triton kernels need a C compiler'}")
 print()
-print(f"=> precision   {PRECISION}" + ("   (Ampere+, matches the campaign)" if cap_f >= 8.0
+print(f"=> precision   {PRECISION}" + ("   (Ampere+)" if cap_f >= 8.0
       else "   (pre-Ampere: no bf16, so full fp32)"))
 
 # Peak VRAM measured on an A100 for a 361-token target at batch size 1:
@@ -224,8 +210,9 @@ Two downloads:
   folding student.
 
 The K16 file is checked against the publisher's own `SHA256SUMS`. The expected
-digest is `343f252b…`, which is **byte-identical to the checkpoint that produced
-the BinderBase campaign** — so folding here is the same model, not a lookalike.
+digest is `343f252b…`, the same checkpoint used to build the
+[BinderBase](https://binderbase.org) catalogue — so folding here is the real
+model, not a lookalike.
 
 Mounting Drive caches both across sessions and is worth it if you will run more
 than once.
@@ -266,7 +253,7 @@ got = h.hexdigest()
 if got != K16_SHA:
     raise SystemExit(f"CHECKSUM MISMATCH\\n  expected {K16_SHA}\\n  got      {got}\\n"
                      "Delete the file and re-run; do not design against it.")
-print(f"  OK  {got[:16]}...  matches the campaign checkpoint")
+print(f"  OK  {got[:16]}...  checkpoint verified")
 
 print("\\nDownloading BoltzGen models (~5.6 GB, slowest step) ...")
 snapshot_download("boltzgen/boltzgen-1")
@@ -282,18 +269,17 @@ K16 weights must run on the K16 schedule — 16 sampling steps, `sigma_min 0.01`
 Pair them with the default Boltz-2 schedule (200 steps) and *nothing errors*:
 the structures look plausible and the sampler is simply wrong.
 
-The config below is copied verbatim from the campaign's own
-`fold_blitz_k16.yaml`, so this notebook folds on exactly the schedule BinderBase
-folded on.
+The config below is BlitzGen's own `fold_blitz_k16.yaml`, copied verbatim, so
+this notebook folds on exactly the schedule K16 was tuned for.
 """))
 
 cells.append(code('K16_YAML = r"""' + K16_CFG + '"""\n\n' + """import pathlib, re
 
-# The campaign config hardcodes precision: bf16-mixed, because every machine in
-# the campaign was Ampere or newer. On a pre-Ampere card the design step would
-# correctly run fp32 (set on the command line) while FOLDING quietly tried bf16
-# and died. Both folding and design_folding read this one file, so rewriting it
-# here covers both.
+# The shipped config hardcodes precision: bf16-mixed, because the machines K16
+# was developed on were all Ampere or newer. On a pre-Ampere card the design
+# step would correctly run fp32 (set on the command line) while FOLDING quietly
+# tried bf16 and died. Both folding and design_folding read this one file, so
+# rewriting it here covers both.
 cfg_text, n = re.subn(r"^(\\s*precision:)\\s*\\S+", r"\\1 " + PRECISION,
                       K16_YAML, flags=re.M)
 cfg = pathlib.Path("/content/fold_blitz_k16.yaml")
@@ -325,8 +311,8 @@ Two things worth knowing before you choose:
   not exist for the model.
 
 Good epitopes are solvent-exposed, high-pLDDT and compact. If you have no basis
-for choosing, that is the honest limit of this notebook — the BinderBase
-catalogue exists because choosing well is the hard part.
+for choosing one, that is the honest limit of this notebook: choosing well is
+the hard part, and it is the part left to you.
 """))
 
 cells.append(code("""#@title Target
@@ -357,9 +343,9 @@ print(f"target {cif}  ({cif.stat().st_size/1e6:.1f} MB)")
 
 # Cropping invents surfaces. The residues at a cut are buried in the real
 # protein but fully exposed in the crop, and the model will cheerfully design a
-# binder against that artefact. The campaign masks them with not_binding; so do
-# we, at both cut boundaries. If a boundary is the true chain terminus the mask
-# is simply redundant, which costs nothing.
+# binder against that artefact. Mask both cut boundaries with not_binding. If a
+# boundary is the true chain terminus the mask is simply redundant, which costs
+# nothing.
 _lo, _hi = (int(x) for x in CROP.split(".."))
 _mask = []
 if MASK_CUT_FACES and _hi - _lo > 2 * MASK_WIDTH:
@@ -368,8 +354,7 @@ MASK_LINE = (f"            not_binding: {','.join(_mask)}\\n" if _mask else "")
 
 spec = textwrap.dedent(f'''\\
 # Generated by the BlitzGen Colab notebook.
-# NOT from the HPA PrEST triage used by the BinderBase campaign -- the epitope
-# below was chosen by the notebook user, not by select_patch.py.
+# The epitope below was chosen by hand, not by a scored triage pipeline.
 entities:
   - protein:
       id: B
@@ -495,11 +480,10 @@ kernels used by triangle attention support `sm_75` is **unknown**. If cell 6
 fails inside `triangular.py`, add `--config design use_kernels=false` — there is
 a pure-PyTorch fallback, at an unmeasured cost in speed and memory.
 
-**No epitope triage.** You choose the site; the campaign used a scored pipeline.
-This is the largest quality gap between a notebook run and a catalogue entry.
-
-**fp32 results are not campaign results.** Same model, same weights, different
-arithmetic, different designs. Say so if you publish them.
+**Report the precision you ran at.** On a pre-Ampere card the notebook folds
+in `fp32` rather than `bf16-mixed`. Same model and same weights, different
+arithmetic and therefore different designs — worth stating alongside any
+results you publish.
 """))
 
 nb = {"cells": cells,

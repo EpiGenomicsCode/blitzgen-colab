@@ -46,24 +46,8 @@ not yet been run on a T4**:
 
 Cards older than Ampere (compute capability < 8.0, which includes the T4) have
 no `bf16`, so the notebook detects this and switches to `fp32`. That costs 4%
-VRAM and 11% wall-clock — not the 2× one might expect, because `bf16-mixed` is
-*mixed*: AMP already holds fp32 master weights, so only the activation subset
-gets promoted. `fp16` was tested and **does not work** — the sampler produces
-non-finite coordinates and the downstream SVD fails.
-
-## How this differs from BinderBase
-
-The notebook says all of this on its front page too, because the numbers get
-copied out of context otherwise.
-
-| | BinderBase campaign | this notebook |
-|---|---|---|
-| precision | `bf16-mixed` | `bf16-mixed` on Ampere+, `fp32` below |
-| designs per target | 100 | ~8–20 (session limits) |
-| epitope choice | HPA PrEST antibody-validated triage | whatever you specify |
-
-**The epitope row is the one that matters.** A binder designed against a badly
-chosen site will still score well — the model answers the question you asked.
+VRAM and 11% wall-clock. `fp16` was tested and **does not work** — the sampler
+produces non-finite coordinates and the downstream SVD fails.
 
 ## Layout
 
