@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Single source of truth for every version fact the notebook states.",
+    "tools/build_notebook.py substitutes these into the cells; CI re-runs the",
+    "generator and fails if the committed .ipynb differs. Change a value here,",
+    "bump VERSION, and add a CHANGELOG entry in the same commit."
+  ],
+
+  "campaign": "BlitzGen HPA PrEST, campaign-20261103",
+
+  "blitzgen_src": "git+https://github.com/EpiGenomicsCode/blitzgen@UNPUBLISHED",
+  "blitzgen_src_status": "PLACEHOLDER -- the K16 fork is not public yet. The notebook CANNOT run until this is a real public ref. It must be pinned to a tag or commit sha, never a branch: @main would let the notebook's behaviour change under a user who saved it.",
+  "blitzgen_requires": ["--folding_config", "--seed"],
+  "blitzgen_upstream": "https://github.com/HannesStark/boltzgen (has --folding_checkpoint; has NEITHER of the two flags above)",
+
+  "k16_checkpoint_hf_repo": "vinaymatt/Blitz-Boltz2",
+  "k16_checkpoint_file": "blitz-boltz2-k16.ckpt",
+  "k16_checkpoint_sha256": "343f252bbfe5e520712232091a9a6fa3291ee67b52d84c794f63812010ee949f",
+
+  "fold_config": "config/fold_blitz_k16.yaml",
+  "fold_config_sha256": "ec0643ab19098e1daa0d01227f81ad93b3e14fa79e4cb4ff19c130342d6e2e4e",
+  "fold_config_origin": "miniBoltz/osg_pilot/fold_blitz_k16.yaml -- vendored verbatim; the sampler schedule BinderBase was folded with (sampling_steps 16, sigma_min 0.01, recycling_steps 5)"
+}

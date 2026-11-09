@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+# Model weights are never committed -- they are fetched at runtime and
+# checksummed against provenance.json.
+*.ckpt
+*.safetensors

@@ -1,0 +1,47 @@
+name: notebook
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # No dependencies on purpose: the generator and the checker are plain
+      # stdlib, so CI cannot break for a reason unrelated to the notebook.
+      - name: Validate notebook
+        run: python3 tools/check_notebook.py
+
+      - name: Notebook is valid nbformat
+        run: |
+          python3 - <<'PY'
+          import json
+          nb = json.load(open("BlitzGen_BinderDesign.ipynb"))
+          assert nb["nbformat"] == 4, nb["nbformat"]
+          assert nb["metadata"]["accelerator"] == "GPU"
+          print(len(nb["cells"]), "cells OK")
+          PY
+
+      - name: Cells compile
+        run: |
+          python3 - <<'PY'
+          import json
+          nb = json.load(open("BlitzGen_BinderDesign.ipynb"))
+          bad = 0
+          for i, c in enumerate(nb["cells"]):
+              if c["cell_type"] != "code":
+                  continue
+              src = "".join(c["source"])
+              # strip Colab form annotations, which are comments anyway
+              try:
+                  compile(src, f"cell{i}", "exec")
+              except SyntaxError as e:
+                  print(f"cell {i}: {e}"); bad += 1
+          raise SystemExit(bad)
+          PY

@@ -1,0 +1,3 @@
+# Notebooks are generated and committed output-free, so a plain textual diff is
+# the right diff. Without this, some tooling treats .ipynb as binary.
+*.ipynb text diff
