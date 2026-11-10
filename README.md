@@ -15,39 +15,42 @@ The GPU is **yours**, not ours. Each run happens in your own Colab or Kaggle
 account on your own quota. Nothing is submitted to a server we operate, and
 there is nothing to pay for or sign up to beyond the host itself.
 
-> ### ⚠️ Not yet run on a T4
->
-> Every performance number below was measured on an A100 and scaled by memory
-> bandwidth. Whether the `cuequivariance` triton kernels used by triangle
-> attention support `sm_75` is **unknown**; if cell 6 fails inside
-> `triangular.py`, add `--config design use_kernels=false` for a pure-PyTorch
-> fallback at an unmeasured cost.
-
 ## Hosts
 
 | | GPU | session | quota | notes |
 |---|---|---|---|---|
 | Colab free | T4 16 GB | ~12 h cap, **90 min idle** | floats | the idle timeout is the real constraint — don't walk away mid-run |
-| Kaggle free | T4 ×2 16 GB | 12 h | ~30 h/week | longer leash; the better default for a 30–40 min job |
+| Kaggle free | T4 ×2 16 GB | 12 h | ~30 h/week | longer leash; the better default for a 40 min job |
 
 Kaggle's weekly quota is not officially published and does drift; treat the
 number as indicative.
 
 ## What to expect
 
-Measured on an A100 and scaled to a T4 by memory bandwidth — **the notebook has
-not yet been run on a T4**:
+Measured end to end on a Colab free T4, at this notebook's default settings
+(P14868, a 269-residue crop, 8 designs, fp32):
 
 | | |
 |---|---|
 | peak VRAM | 8.9 GB fp32 / 8.6 GB bf16 — fits a 16 GB T4 with room to spare |
-| 8 designs | ~30–40 min on a T4 (8 min measured on an A100) |
+| 8 designs | **40 min** |
+| where it goes | design 18 min, folding 16 min — together 89% of the run |
+| startup | ~2 min total, spread across the six steps |
 | download | ~7.5 GB of weights, once per session |
+
+The same pipeline on a smaller target took about 9 min on an A100. The two runs
+used different crops, so read that as the rough shape of the gap, not a
+like-for-like ratio.
 
 Cards older than Ampere (compute capability < 8.0, which includes the T4) have
 no `bf16`, so the notebook detects this and switches to `fp32`. That costs 4%
 VRAM and 11% wall-clock. `fp16` was tested and **does not work** — the sampler
 produces non-finite coordinates and the downstream SVD fails.
+
+Below capability 8.0 BoltzGen also disables its `cuequivariance` triangle
+kernels on its own, so a T4 runs a pure-PyTorch path. Measured on an A100, that
+fallback costs 1.14× at batch size 1 and 1.35× at the batch size used for 100
+designs. It is already included in the 40 min above.
 
 ## Layout
 

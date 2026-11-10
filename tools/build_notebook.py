@@ -158,12 +158,14 @@ else:
 
 if cap_f < 8.0:
     print(textwrap.dedent('''
-        SPEED NOTE. Reference: 8 designs took 489 s (bf16) / 556 s (true fp32)
-        on an A100. This workload is NOT matmul-bound -- disabling TF32 cost
-        only 2.4% -- so the limit on an older card is memory bandwidth, not
-        FLOPS. A T4 (320 GB/s vs the A100's 1555) should land near 30-40 min
-        for 8 designs. That is an estimate from a bandwidth ratio, not a
-        measurement; please report what you actually see.
+        SPEED NOTE. Measured on a Colab T4: 8 designs at this
+        notebook's defaults took 40 min end to end -- design 18 min,
+        folding 16 min, everything else under 5 min combined. This
+        workload is bandwidth-bound, not matmul-bound: disabling TF32
+        on an A100 cost only 2.4%, so a T4's 320 GB/s against the
+        A100's 1555 is what sets the pace. Below capability 8.0
+        BoltzGen also runs its pure-PyTorch triangle path instead of
+        the cuequivariance kernels; that cost is included here.
     '''))"""))
 
 # ---------------------------------------------------------- 2. install ------
@@ -186,18 +188,38 @@ Takes a couple of minutes.
 cells.append(code("""#@title Install BlitzGen
 BLITZGEN_SRC = "@@BLITZGEN_SRC@@"  #@param {type:"string"}
 
+# Expect 4-8 minutes on a fresh Colab VM. pip clones the repository and builds
+# a wheel from source before it begins resolving dependencies, and the pinned
+# numpy/numba force a re-resolve against the preinstalled stack.
+#
+# The output below is streamed line by line rather than captured, so this cell
+# shows progress while it works. A cell that prints nothing for minutes is a
+# stalled install, not a working one.
 import subprocess, sys
-r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", BLITZGEN_SRC],
-                   capture_output=True, text=True)
-print(r.stdout[-2000:]); print(r.stderr[-3000:])
-if r.returncode != 0:
+
+print("installing:", BLITZGEN_SRC, flush=True)
+p = subprocess.Popen([sys.executable, "-m", "pip", "install", BLITZGEN_SRC],
+                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                     text=True, bufsize=1)
+for line in p.stdout:
+    print(line.rstrip(), flush=True)
+if p.wait() != 0:
     raise SystemExit(
         "Install failed.\\n"
         "If this is a 404/auth error the repository is private or does not exist.\\n"
         "A public source is required; see the final section of this notebook.")
 
-import importlib, boltzgen  # noqa
-print("boltzgen", getattr(boltzgen, "__version__", "(unversioned)"))"""))
+# pip reports conflicts against the host's preinstalled scientific stack here:
+# on Colab, jax / tifffile / dm-tree / ml-dtypes want numpy>=2.1 and stumpy
+# wants numba>=0.61.2, while BlitzGen pins numpy==2.0.2 and numba==0.61.0.
+# None of those packages are on BlitzGen's import path. The warnings are
+# expected, they are not errors, and this notebook is unaffected.
+from importlib.metadata import version, PackageNotFoundError
+import boltzgen  # noqa: F401
+try:
+    print("blitzgen", version("blitzgen"), "(import package: boltzgen)")
+except PackageNotFoundError:
+    print("blitzgen installed but metadata missing -- version unverified")"""))
 
 # ---------------------------------------------------------- 3. weights ------
 cells.append(md("""---
@@ -321,24 +343,40 @@ CHAIN       = "A"                   #@param {type:"string"}
 CROP        = "233..501"            #@param {type:"string"}
 BINDING     = "352..363,367..372,374..375"  #@param {type:"string"}
 BINDER_LEN  = "55..130"             #@param {type:"string"}
-NUM_DESIGNS = 8                     #@param {type:"integer"}
 MASK_CUT_FACES = True               #@param {type:"boolean"}
 MASK_WIDTH  = 3                     #@param {type:"integer"}
 
-import urllib.request, pathlib, textwrap
+import urllib.request, json, pathlib, textwrap
 work = pathlib.Path("/content/work"); (work / "targets").mkdir(parents=True, exist_ok=True)
 (work / "specs").mkdir(exist_ok=True)
 
 cif = work / "targets" / f"AF-{UNIPROT}-F1.cif"
 if not cif.exists():
-    url = f"https://alphafold.ebi.ac.uk/files/AF-{UNIPROT}-F1-model_v4.cif"
-    print(f"fetching {url}")
+    # Resolve the download URL through the AlphaFold DB API rather than
+    # building it from a version string. AFDB revises its models and retires
+    # the old filenames: the hardcoded "_v4" URL this notebook shipped with
+    # began returning 404 for every accession once the database moved to v6.
+    # The API always names the file that currently exists.
+    api = f"https://alphafold.ebi.ac.uk/api/prediction/{UNIPROT}"
+    print(f"resolving {UNIPROT} via {api}", flush=True)
+    try:
+        with urllib.request.urlopen(api, timeout=60) as r:
+            meta = json.load(r)
+        if not meta:
+            raise ValueError("accession has no AlphaFold DB entry")
+        url = meta[0]["cifUrl"]
+        afdb_version = meta[0].get("latestVersion", "?")
+    except Exception as e:
+        raise SystemExit(f"Could not resolve {UNIPROT} in AlphaFold DB: {e}\\n"
+                         "Check the accession at https://alphafold.ebi.ac.uk/\\n"
+                         f"or upload a .cif to {cif} yourself.")
+    print(f"fetching {url}", flush=True)
     try:
         urllib.request.urlretrieve(url, cif)
     except Exception as e:
         raise SystemExit(f"Could not fetch {UNIPROT} from AlphaFold DB: {e}\\n"
-                         "Check the accession, or upload a .cif to "
-                         f"{cif} yourself.")
+                         f"Upload a .cif to {cif} yourself to continue.")
+    print(f"AlphaFold DB model version: v{afdb_version}")
 print(f"target {cif}  ({cif.stat().st_size/1e6:.1f} MB)")
 
 # Cropping invents surfaces. The residues at a cut are buried in the real
@@ -387,18 +425,41 @@ cells.append(md("""---
 
 Six pipeline steps run as separate processes — design, inverse folding, folding,
 design folding, analysis, filtering. Each loads its own checkpoint, which is why
-there is a fixed cost of roughly **4 minutes** before per-design work begins.
+they add about **2 minutes** of startup across the six.
 
-Expect **~8 min** for 8 designs on an A100, **~30–40 min** on a T4.
+Measured for 8 designs at this notebook's defaults: **40 min on a Colab T4** —
+design 18 min, folding 16 min, the rest under 5 min combined. A smaller target
+on an A100 took about 9 min.
 Do not close the tab: Colab disconnects after 90 idle minutes.
 """))
 
-cells.append(code("""import subprocess, sys, time, os
+cells.append(code("""#@title Run
+NUM_DESIGNS = 8                     #@param {type:"integer"}
+PROTOCOL    = "protein-anything"    #@param ["protein-anything", "peptide-anything", "nanobody-anything", "antibody-anything"]
+
+# PROTOCOL selects BoltzGen's analysis and filtering presets. It does not
+# change the design architecture:
+#
+#   protein-anything    general binder. The default, and what BinderBase uses.
+#   peptide-anything    filters cysteines and drops the hydrophobic-patch
+#                       checks. Pair it with a shorter BINDER_LEN in step 5.
+#   nanobody-anything   filters cysteines, hydrophobic-patch checks off.
+#   antibody-anything   same presets as nanobody.
+#
+# Two of BoltzGen's protocols are deliberately absent from this list.
+# protein-small_molecule needs a ligand in the spec, and step 5 builds a
+# protein-only spec from AlphaFold. protein-redesign rewrites an existing
+# chain instead of designing a new binder, so it does not fit this spec shape.
+#
+# NUM_DESIGNS costs time, not memory: peak VRAM was measured flat at 8.5-8.7 GB
+# from 8 designs to 100. Lowering it will not rescue an out-of-memory failure --
+# narrow CROP in step 5 for that.
+import subprocess, sys, time, os, re
 
 cmd = [
     "boltzgen", "run", str(spec_path),
     "--output", "/content/work/run",
-    "--protocol", "protein-anything",
+    "--protocol", PROTOCOL,
     "--num_designs", str(NUM_DESIGNS),
     "--cache", os.environ["HF_HOME"],
     "--folding_checkpoint", str(CKPT),
@@ -408,11 +469,30 @@ cmd = [
     "--config", "filtering", f"budget={NUM_DESIGNS}",
 ]
 print(" ".join(cmd), "\\n" + "=" * 78)
+
+# boltzgen writes to a pipe here, not a terminal, so Python block-buffers its
+# output and the progress bar arrives in ~8 KB dumps -- a 17-minute design step
+# can jump straight from 0/8 to 8/8. PYTHONUNBUFFERED makes the child flush as
+# it goes, and readline() avoids the read-ahead that file iteration applies to
+# pipes.
+env = dict(os.environ, PYTHONUNBUFFERED="1")
 t0 = time.time()
 p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                     text=True, bufsize=1)
-for line in p.stdout:
-    sys.stdout.write(line)
+                     text=True, bufsize=1, env=env)
+
+# tqdm redraws the same bar many times a second. Each redraw ends in a carriage
+# return, which text mode turns into its own line, so printing every one would
+# bury the real output. Print a progress line only when its "n/total" changes.
+_bar  = re.compile(r"\\b(\\d+)/(\\d+)\\s*\\[")
+_last = None
+for line in iter(p.stdout.readline, ""):
+    hit = _bar.search(line)
+    if hit:
+        if hit.group(0) == _last:
+            continue
+        _last = hit.group(0)
+    sys.stdout.write(line if line.endswith("\\n") else line + "\\n")
+    sys.stdout.flush()
 p.wait()
 print("=" * 78)
 print(f"exit {p.returncode}   elapsed {time.time()-t0:.0f}s")
@@ -426,9 +506,12 @@ cells.append(md("""---
 `final_ranked_designs/` holds the ranked designs and their metrics.
 
 Reading them: **`design_to_target_iptm`** is the headline number — the model's
-own confidence in the binder-target interface. **`complex_plddt`** is per-atom
-confidence. **`bb_rmsd_design`** is how far the refolded binder drifted from the
-designed backbone; large values mean the design does not fold to what was drawn.
+own confidence in the binder-target interface. **`min_design_to_target_pae`** is
+the predicted error across that interface, where lower is better.
+**`filter_rmsd`** is how far the refolded binder drifted from the designed
+backbone; large values mean the design does not fold to what was drawn.
+**`plip_hbonds_refolded`** and **`delta_sasa_refolded`** describe the interface
+itself — hydrogen bonds, and buried surface area in square angstroms.
 
 A confident-looking score is not a binder. These are *in-silico* designs, and the
 published hit rates for this class of method are single-digit percent before
@@ -444,8 +527,9 @@ else:
     with open(hits[0]) as fh:
         rows = list(csv.DictReader(fh))
     print(f"{len(rows)} designs\\n")
-    cols = [c for c in ("id", "design_to_target_iptm", "complex_plddt",
-                        "design_ptm", "bb_rmsd_design", "quality_score")
+    cols = [c for c in ("id", "final_rank", "design_to_target_iptm",
+                        "min_design_to_target_pae", "design_ptm", "filter_rmsd",
+                        "plip_hbonds_refolded", "delta_sasa_refolded")
             if rows and c in rows[0]]
     print("  ".join(f"{c[:22]:>22s}" for c in cols))
     print("-" * (24 * len(cols)))
@@ -464,7 +548,99 @@ else:
         print(f"(auto-download unavailable: {e}; the zip is at "
               "/content/blitzgen_designs.zip)")"""))
 
-# --------------------------------------------------------- 8. caveats ------
+
+# ------------------------------------------------------- 8. visualise ------
+cells.append(md("""---
+## 8 · Look at them
+
+A score is not a structure. This renders any design that passes a cutoff you
+choose, with the target in grey and the binder coloured by its own per-residue
+confidence (red low, blue high). Residues within 5 A of the target are drawn as
+sticks, so you can see whether the interface is real contact or a near miss.
+
+Loosen `CUTOFF` if the dropdown comes up empty; the cell prints the observed
+range of whichever metric you pick.
+"""))
+
+cells.append(code("""#@title Visualise designs
+FILTER_BY = "design_to_target_iptm"  #@param ["design_to_target_iptm", "design_ptm", "min_design_to_target_pae", "filter_rmsd", "plip_hbonds_refolded", "delta_sasa_refolded", "liability_score"]
+CUTOFF    = 0.6  #@param {type:"number"}
+
+import subprocess, sys, csv, pathlib
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "py3Dmol==2.5.5"],
+               check=False)
+import py3Dmol, ipywidgets as W
+from IPython.display import display, clear_output
+
+# For these, a smaller number is the better one. Everything else is
+# higher-is-better, which decides the direction of the cutoff and the sort.
+LOWER_IS_BETTER = {"min_design_to_target_pae", "filter_rmsd", "liability_score",
+                   "design_largest_hydrophobic_patch_refolded"}
+
+RANKED = pathlib.Path("/content/work/run/final_ranked_designs")
+csvs = (sorted(RANKED.glob("final_designs_metrics_*.csv"))
+        or sorted(RANKED.glob("all_designs_metrics.csv")))
+if not csvs:
+    raise SystemExit("No metrics CSV in final_ranked_designs -- did step 6 finish?")
+rows = list(csv.DictReader(open(csvs[0])))
+
+def num(r, k):
+    try:
+        return float(r[k])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+vals = [v for v in (num(r, FILTER_BY) for r in rows) if v is not None]
+if not vals:
+    raise SystemExit(f"{FILTER_BY} is not present in {csvs[0].name}")
+lower = FILTER_BY in LOWER_IS_BETTER
+print(f"{FILTER_BY}: min {min(vals):.3f}   median {sorted(vals)[len(vals)//2]:.3f}"
+      f"   max {max(vals):.3f}   ({'lower' if lower else 'higher'} is better)")
+
+keep = [(v, r) for r, v in ((r, num(r, FILTER_BY)) for r in rows)
+        if v is not None and (v <= CUTOFF if lower else v >= CUTOFF)]
+keep.sort(key=lambda t: t[0], reverse=not lower)
+print(f"{len(keep)} of {len(rows)} designs pass "
+      f"{FILTER_BY} {'<=' if lower else '>='} {CUTOFF}")
+if not keep:
+    raise SystemExit("Nothing passes -- loosen CUTOFF and re-run this cell.")
+
+options = []
+for v, r in keep:
+    hit = next(RANKED.glob(f"final_*_designs/*{r['id']}.cif"), None)
+    if hit is None:
+        continue
+    rank = int(float(r.get("final_rank") or 0))
+    options.append((f"rank {rank:>3}   {FILTER_BY} {v:.3f}   {r['id']}", str(hit)))
+if not options:
+    raise SystemExit("Metrics rows found but no matching .cif files.")
+
+dd  = W.Dropdown(options=options, description="design:",
+                 layout=W.Layout(width="640px"))
+out = W.Output()
+
+def render(_=None):
+    with out:
+        clear_output(wait=True)
+        # Chain A is the designed binder, chain B the target crop. The B-factor
+        # column carries per-residue confidence, which is what colours the binder.
+        view = py3Dmol.view(width=760, height=520)
+        view.addModel(pathlib.Path(dd.value).read_text(), "cif")
+        view.setStyle({"chain": "B"}, {"cartoon": {"color": "lightgrey"}})
+        view.setStyle({"chain": "A"},
+                      {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb",
+                                                   "min": 0.5, "max": 1.0}}})
+        view.addStyle({"chain": "A",
+                       "within": {"distance": 5, "sel": {"chain": "B"}}},
+                      {"stick": {"radius": 0.15}})
+        view.zoomTo({"chain": "A"})
+        view.show()
+
+dd.observe(render, names="value")
+display(dd, out)
+render()"""))
+
+# --------------------------------------------------------- 9. caveats ------
 cells.append(md("""---
 ## Known limitations
 
@@ -474,11 +650,12 @@ BlitzGen additions; upstream BoltzGen has neither, and without
 no error, plausible-looking structures, wrong sampler. Cell 2 pins
 [`@@BLITZGEN_SRC@@`](https://github.com/EpiGenomicsCode/blitzgen/tree/v0.1.0).
 
-**Untested on a T4.** Every number here was measured on an A100 and extrapolated
-by a memory-bandwidth ratio. In particular, whether the `cuequivariance` triton
-kernels used by triangle attention support `sm_75` is **unknown**. If cell 6
-fails inside `triangular.py`, add `--config design use_kernels=false` — there is
-a pure-PyTorch fallback, at an unmeasured cost in speed and memory.
+**Run on a T4.** 8 designs at the default settings took 40 min end to end on a
+Colab free T4 in fp32, with no intervention. The `sm_75` question that used to
+sit here does not arise: below compute capability 8.0 BoltzGen sets
+`use_kernels=False` itself, so the `cuequivariance` triangle kernels are never
+reached on a T4 and the pure-PyTorch path is what runs. Its cost is already in
+that 40 min.
 
 **Report the precision you ran at.** On a pre-Ampere card the notebook folds
 in `fp32` rather than `bf16-mixed`. Same model and same weights, different
